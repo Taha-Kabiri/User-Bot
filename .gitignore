@@ -1,0 +1,57 @@
+# ===== وابستگی‌ها =====
+node_modules/
+yarn.lock
+pnpm-lock.yaml
+
+# ===== فایل‌های محیطی =====
+.env
+.env.local
+.env.*.local
+
+# ===== فایل‌های موقت و کش =====
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.tmp/
+/tmp/
+*.tmp
+profile_*.jpg
+
+# ===== فایل‌های سیستمی =====
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ===== فایل‌های ویرایشگر =====
+.vscode/
+.idea/
+*.iml
+.editorconfig
+
+# ===== فایل‌های بیلد =====
+dist/
+build/
+coverage/
+.nyc_output/
+
+# ===== فایل‌های شخصی =====
+*.pem
+*.key
+*.cert
+*.p12
+
+# ===== دیتابیس‌های محلی =====
+*.sqlite
+*.sqlite3
+*.db
+
+# ===== فایل‌های داکر =====
+.dockerignore
+docker-compose.override.yml
+
+# ===== فایل‌های ارسال‌شده توسط کاربر =====
+downloads/
+uploads/
