@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  userbot:
+    build: .
+    container_name: userbot-telegram
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
