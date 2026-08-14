@@ -97,7 +97,7 @@ SESSION_STRING=your_session_string_here
 # ----- Google Gemini -----
 
 AI_API_KEY=your_google_gemini_api_key
-AI_MODEL=gemini-flash-latest
+AI_MODEL=gemini-3.5-flash-lite
 
 # ----- MongoDB -----
 
