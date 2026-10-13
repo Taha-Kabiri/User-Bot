@@ -6,12 +6,12 @@ const apiKey = process.env.AI_API_KEY;
 const modelName = process.env.AI_MODEL || "gemini-flash-latest";
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// کش محلی دیکشنری 
+// ==================== Cache ====================
 let cachedDictionary = null;
 let cacheTime = 0;
 const CACHE_TTL = 60 * 1000;
 
-// بارگیری دیکشنری از DB 
+// ==================== Dictionary Operations ====================
 export async function loadDictionary() {
   const now = Date.now();
   if (cachedDictionary && (now - cacheTime) < CACHE_TTL) {
@@ -23,11 +23,9 @@ export async function loadDictionary() {
   return cachedDictionary;
 }
 
-// دریافت پاسخ از دیکشنری بر اساس لحن
 export async function getDictionaryResponse(behavior, context = {}) {
   const dictionary = await loadDictionary();
 
-  // پشتیبانی از هر دو حالت: behavior رشته یا object { tone, intensity }
   let tone = behavior;
   if (typeof behavior === 'object' && behavior !== null) {
     tone = behavior.tone;
@@ -48,7 +46,7 @@ export async function getDictionaryResponse(behavior, context = {}) {
   return responses[Math.floor(Math.random() * responses.length)];
 }
 
-// بازنگری کش
+// Reload dictionary from DB
 export async function reloadDictionary() {
   cachedDictionary = null;
   cacheTime = 0;
@@ -57,21 +55,19 @@ export async function reloadDictionary() {
   return dict;
 }
 
-// افزودن واکنش جدید به دیکشنری
 export async function addDictionaryEntry(category, response) {
   const result = await addDictionaryEntryDB(category, response);
-  // بروزرسانی کش
   cachedDictionary = result;
   cacheTime = Date.now();
   return result;
 }
 
-// ===== تولید واکنش‌های جدید روزانه بر اساس تعاملات امروز =====
+// ==================== Daily Generation ====================
+// Generate daily dictionary entries from user messages
 export async function generateDailyDictionaryEntries() {
   const status = await getSystemStatus();
   const now = new Date();
 
-  // فقط یک بار در روز
   if (status.lastDictionaryUpdate && (now - new Date(status.lastDictionaryUpdate)) < 22 * 3600 * 1000) {
     return false;
   }
@@ -79,11 +75,9 @@ export async function generateDailyDictionaryEntries() {
   try {
     const allUsers = await User.find({ isActive: true }).limit(50);
 
-    // جمع‌آوری تعاملات اخیر هر کاربر
     const toneSamples = {};
     for (const u of allUsers) {
       const msgs = u.last24hMessages || [];
-      const profile = u.behaviorProfile || {};
       const tone = u.tone || 'neutral';
 
       if (!toneSamples[tone]) toneSamples[tone] = [];
@@ -94,19 +88,18 @@ export async function generateDailyDictionaryEntries() {
 
     const model = genAI.getGenerativeModel({ model: modelName });
 
-    // برای هر لحن، چند واکنش جدید تولید کن
     const categories = ['rude', 'romantic', 'sexy', 'sports', 'dirty_talk', 'polite', 'music'];
 
     for (const cat of categories) {
       const samples = toneSamples[cat] || [];
       if (samples.length === 0) continue;
 
-      const prompt = `تو یک نویسنده محتوای گفتاری هوش مصنوعی هستی. بر اساس سبک زیر، ۳ تا واکنش جدید، طبیعی و غیرتکراری برای یک چت تلگرامی بنویس. فقط واکنش‌ها را بدون شماره یا توضیح اضافه بنویس:\n\nسبک: ${cat === 'rude' ? 'بی‌ادب، تند و بی‌پروا' : cat === 'romantic' ? 'عاشقانه، لاس‌زننده و احساسی' : cat === 'sexy' ? 'جلب‌کننده، شیک و جنده' : cat === 'sports' ? 'ورزشی، هوادارانه و پویا' : cat === 'dirty_talk' ? 'گفتار صریح، لامسه‌وار و جان‌انگیز' : cat === 'polite' ? 'مودب، دل‌نشین و دوستانه' : cat === 'music' ? 'موسیقی‌محور، هیجان‌زده و خلاقانه' : ''}\n\nنمونه‌های امروز: ${samples.slice(0, 3).join(' | ')}`;
+      const stylePrompt = getStylePrompt(cat);
+      const prompt = `تو «طاها» هستی. یک آدم واقعی در تلگرم. بر اساس سبک زیر، ۳ تا واکنش جدید، طبیعی و غیرتکراری برای چت بنویس. فقط واکنش‌ها رو بنویس، بدون شماره یا توضیح:\n\nسبک: ${stylePrompt}\n\nنمونه‌های امروز: ${samples.slice(0, 3).join(' | ')}`;
 
       try {
         const result = await model.generateContent(prompt);
         const text = await result.response.text();
-        // استخراج خطوط که واکنش‌ها هستند (حذف خطوط خالی و شماره‌ها)
         const lines = text.split('\n')
           .map(l => l.replace(/^\d+[\.\)]?\s*/, '').trim())
           .filter(l => l.length > 3 && l.length < 500);
@@ -130,20 +123,86 @@ export async function generateDailyDictionaryEntries() {
   }
 }
 
-// دیکشنری پیش‌فرض 
+// ==================== Helpers ====================
+function getStylePrompt(cat) {
+  const styles = {
+    rude: 'بی‌ادب، تند، کنایه‌آمیز، جواب محکم به بی‌ادبی غریبه. بدون فحش به خانواده. لحن خونسرد.',
+    romantic: 'عاشقانه طبیعی، مستقیم، صمیمی. بدون «عزیزم دلبرم» تکراری. لاس‌زننده اما نه مصنوعی.',
+    sexy: 'جلب‌کننده، شیک، با حس. کلمات لطیفه‌وار، نه رکیک بی‌حد. مرز داشته باش.',
+    sports: 'ورزشی، هوادارانه، طبیعی. مثل یه رفیق فوتبال حرف بزن.',
+    dirty_talk: 'گفتار صریح، لامسه‌وار، جان‌انگیز. خوش‌ذوق، جلب‌کننده، نه زشت.',
+    polite: 'مودب، دل‌نشین، دوستانه، طبیعی. نه رسمی، نه کتابی.',
+    music: 'موسیقی‌محور، طبیعی، خلاقانه. مثل کسی که واقعاً آهنگ گوش میده.',
+  };
+  return styles[cat] || 'طبیعی، محاوره‌ای، تلگرامی.';
+}
+
 function getDefaultDictionary() {
   return {
-    default: ["درود طاها نیستم، من دستیارشم در خدمت شما! اگه کارت مهمه بگو عزیزم."],
-    polite: ["چشم عزیزم، در خدمت شما هستم! 🙏"],
-    rude: ["کصخل بابا! تو به من می‌گی چیکار کنم؟ 🖕"],
-    romantic: ["چه چشمان قشنگی داری عزیزم! 😍"],
-    music: ["آهنگ خوبی انتخاب کردی! 🎵"],
-    sexy: ["می‌دونی این لباس چه می‌کنه بهت؟ 😏"],
-    sports: ["چه بازیک اگه؟ فوتبال امروز رو می‌بینی؟ ⚽"],
-    dirty_talk: ["می‌دونی صبح تا شب فکرت هستم... 💦"],
-    limit: ["خوب من باید برم! صبر کن تا خودش بیاد... ⏳"]
+    default: [
+      "سلام، خوبی؟",
+      "چطوری؟",
+      "چه خبر؟",
+      "خوبی؟",
+      "سلام",
+    ],
+    polite: [
+      "چشم، در خدمتم",
+      "مرسی، تو چطوری؟",
+      "خوبم، تو خوبی؟",
+      "لطف داری",
+      "چشم عزیزم",
+    ],
+    rude: [
+      "به تو چه؟",
+      "خفه شو بی‌ادب",
+      "کص نگو بابا",
+      "خودی تو نمیدونی با کی حرف میزنی",
+      "حق داری، رفتم تو خط",
+    ],
+    romantic: [
+      "ممنون، لطف داری",
+      "قربونت، خفن خودتی",
+      "تو هم قشنگی",
+      "دلتنگتم",
+      "جون دلم",
+    ],
+    music: [
+      "خفن، چی گوش میدی؟",
+      "آهنگ خوبی بود",
+      "فکر کنم قبلاً شنیدمش",
+      "سبکش چیه؟",
+      "خوبیه، ممنون که گذاشتی",
+    ],
+    sexy: [
+      "میدونم، ممنون",
+      "تو هم بد نیستی",
+      "جون دلم",
+      "خفه شو بخندم",
+      "بد جوری میگی",
+    ],
+    sports: [
+      "بله، تیمی؟",
+      "دیده‌ام، بازی خوبی بود",
+      "هوادار کی هستی؟",
+      "گل چیه؟",
+      "ورزش میکنی؟",
+    ],
+    dirty_talk: [
+      "جون دلم، ساک بزن",
+      "بد جوری میگی",
+      "خفه شو بخندم",
+      "دیگه حوصله ندارم",
+      "میدونم، ممنون",
+    ],
+    limit: [
+      "خوب من باید برم",
+      "صبر کن تا بیاد",
+      "توکن تموم شد",
+      "بای بای",
+      "چند ساعته برمی‌گردم",
+    ],
   };
 }
 
-// Export for compatibility
 export { DEFAULT_PERSONALITY };

@@ -12,6 +12,7 @@ function getPhotoId(photo) {
     return id !== undefined && id !== null ? String(id) : '';
 }
 
+// ==================== User Info ====================
 export async function getUserFullInfo(client, userId, chatId) {
     try {
         const user = await getUser(userId, chatId);
@@ -85,10 +86,11 @@ export async function getUserFullInfo(client, userId, chatId) {
     }
 }
 
-// تابع بررسی محدودیت هر کاربر
+// ==================== User Limits ====================
+// Check per-user message limit
 export async function checkUserLimit(userId, chatId) {
     const user = await getUser(userId, chatId);
-    const limit = Number(process.env.USER_LIMIT_MESSAGES) || 5;
+    const limit = Number(process.env.USER_LIMIT_MESSAGES) || 30;
     const hours = Number(process.env.USER_LIMIT_HOURS) || 2;
 
     if (user.resetTime && new Date() > user.resetTime) {
@@ -102,17 +104,15 @@ export async function checkUserLimit(userId, chatId) {
     return user.messageCount < limit;
 }
 
-// تابع افزایش شمارش پیام کاربر
+// Increment user message counter
 export async function incrementUserMessage(userId, chatId) {
     const user = await getUser(userId, chatId);
     const hours = Number(process.env.USER_LIMIT_HOURS) || 2;
-    const newCount = user.messageCount + 1;
     const resetTime = user.resetTime || new Date(Date.now() + hours * 3600 * 1000);
 
     await updateUser(userId, chatId, {
-        messageCount: newCount,
-        resetTime: resetTime,
-        lastInteraction: new Date()
+        $inc: { messageCount: 1 },
+        $set: { resetTime: resetTime, lastInteraction: new Date() }
     });
 }
 
@@ -123,12 +123,13 @@ export async function resetUserLimit(userId, chatId) {
     });
 }
 
-// ذخیره آخرین لحن تشخیص داده‌شده کاربر
+// ==================== Tone & Behavior Tracking ====================
+// Store detected user tone
 export async function setUserTone(userId, chatId, tone) {
     await updateUser(userId, chatId, { tone });
 }
 
-// ثبت الگوی رفتاری هر کاربر
+// Track user behavior patterns
 export async function updateUserBehavior(userId, chatId, behavior) {
     const user = await getUser(userId, chatId);
     const counts = user.behaviorCounts && typeof user.behaviorCounts === 'object' ? user.behaviorCounts : {};
@@ -150,27 +151,25 @@ export async function addAnalysisHistory(userId, chatId, record) {
     await updateUser(userId, chatId, { analysisHistory: trimmed });
 }
 
-// ===== حافظه روزانه: ذخیره آخرین ۲ پیام هر کاربر در هر روز =====
+// ==================== Daily Memory ====================
+// Daily memory: store last 2 messages per user per day
 export async function saveDailyMessageMemory(userId, chatId, message) {
     const user = await getUser(userId, chatId);
     const today = new Date().toISOString().split('T')[0]; 
 
     let memory = Array.isArray(user.dailyMessageMemory) ? [...user.dailyMessageMemory] : [];
 
-    // پیدا کردن یا ساخت روز جارع
     let todayEntry = memory.find((m) => m.date === today);
     if (!todayEntry) {
         todayEntry = { date: today, messages: [] };
         memory.push(todayEntry);
     }
 
-    // افزودن پیام و نگهداری فقط آخرین ۲
     todayEntry.messages.push(message);
     if (todayEntry.messages.length > 2) {
         todayEntry.messages = todayEntry.messages.slice(-2);
     }
 
-    // حفظ آرشیو ۳۰ روز اخیر
     if (memory.length > 30) {
         memory = memory.slice(-30);
     }
@@ -178,7 +177,7 @@ export async function saveDailyMessageMemory(userId, chatId, message) {
     await updateUser(userId, chatId, { dailyMessageMemory: memory });
 }
 
-// دریافت آخرین ۲ پیام امروز
+// Get today's last 2 messages
 export async function getDailyMessages(userId, chatId) {
     const user = await getUser(userId, chatId);
     const today = new Date().toISOString().split('T')[0];
@@ -186,20 +185,50 @@ export async function getDailyMessages(userId, chatId) {
     return entry ? entry.messages : [];
 }
 
-// دریافت تمام حافظه روزانه 
+// Get all daily memory
 export async function getAllDailyMessages(userId, chatId) {
     const user = await getUser(userId, chatId);
     return user.dailyMessageMemory || [];
 }
 
-// ===== به‌روزرسانی پروفایل رفتاری کاربر با لحن و شدت ======
+// ==================== Conversation History ====================
+// Get conversation pairs (user message + bot response) - last 5
+export async function getConversationPairs(userId, chatId) {
+    const user = await getUser(userId, chatId);
+    const pairs = Array.isArray(user.conversationPairs) ? user.conversationPairs : [];
+    return pairs.slice(-5);
+}
+
+// Save conversation pair
+export async function saveConversationPair(userId, chatId, userMessage, botResponse) {
+    if (!userMessage || !userMessage.trim() || !botResponse || !botResponse.trim()) {
+        return;
+    }
+
+    const user = await getUser(userId, chatId);
+    const pairs = Array.isArray(user.conversationPairs) ? [...user.conversationPairs] : [];
+
+    pairs.push({
+        userMessage: userMessage.trim(),
+        botResponse: botResponse.trim(),
+        timestamp: new Date()
+    });
+
+    const trimmedPairs = pairs.slice(-5);
+
+    await updateUser(userId, chatId, {
+        conversationPairs: trimmedPairs
+    });
+}
+
+// ==================== Behavior Profile ====================
+// Update user behavior profile with tone and intensity
 export async function updateBehaviorProfile(userId, chatId, behavior, intensity = 1) {
     const user = await getUser(userId, chatId);
     const profile = user.behaviorProfile && typeof user.behaviorProfile === 'object'
         ? { ...user.behaviorProfile }
         : {};
 
-    // مقداردهی اولیه تراکنش‌ها
     if (!profile.toneCounts) profile.toneCounts = {};
     if (!profile.toneDistribution) profile.toneDistribution = {};
     if (!profile.recentTones) profile.recentTones = [];
@@ -213,21 +242,17 @@ export async function updateBehaviorProfile(userId, chatId, behavior, intensity 
     if (!profile.interests) profile.interests = [];
     if (!profile.lastProfileUpdate) profile.lastProfileUpdate = new Date();
 
-    // به‌روزرسانی شمارش لحن
     profile.toneCounts[behavior] = (profile.toneCounts[behavior] || 0) + 1;
 
-    // محاسبه توزیع وزن‌دار 
     const total = Object.values(profile.toneCounts).reduce((s, v) => s + v, 0) || 1;
     for (const [t, c] of Object.entries(profile.toneCounts)) {
         profile.toneDistribution[t] = Number((c / total).toFixed(3));
     }
 
-    // ذخیره در recentTones 
     const today = new Date().toISOString().split('T')[0];
     profile.recentTones.push({ date: today, tone: behavior, intensity });
     if (profile.recentTones.length > 50) profile.recentTones = profile.recentTones.slice(-50);
 
-    // بروز رسانی سطوح هر بخش
     const levelMap = {
         rude: 'rude', romantic: 'romantic', sexy: 'sexy', sports: 'sports',
         dirty_talk: 'dirtyTalk', music: 'music', polite: 'polite'
@@ -235,11 +260,9 @@ export async function updateBehaviorProfile(userId, chatId, behavior, intensity 
     if (levelMap[behavior]) {
         const levelKey = levelMap[behavior];
         const count = profile.toneCounts[behavior] || 0;
-        
         profile.levels[levelKey] = Math.min(count / 5, 1.0);
     }
 
-    // تشخیص افراطی بودن
     profile.flags.excessiveRude = (profile.levels.rude > 0.5 || (profile.toneCounts['rude'] || 0) > 5);
     profile.flags.excessivePolite = (profile.levels.polite > 0.3 && (profile.toneCounts['rude'] || 0) < 2);
     profile.flags.excessiveRomantic = (profile.levels.romantic > 0.4);
@@ -250,14 +273,14 @@ export async function updateBehaviorProfile(userId, chatId, behavior, intensity 
     await updateUser(userId, chatId, { behaviorProfile: profile });
 }
 
-// ===== به‌روزرسانی سازگاری شخصیت بات نسبت به کاربر =====
+// ==================== Personality Adaptation ====================
+// Adapt bot personality to user behavior
 export async function adaptPersonalityToBehavior(userId, chatId, behavior, profile) {
     const user = await getUser(userId, chatId);
     let adaptation = user.personalityAdaptation && user.personalityAdaptation !== null
         ? { ...user.personalityAdaptation }
         : {};
 
-    // مقداردهی اولیه
     if (!adaptation.rudeMultiplier) adaptation.rudeMultiplier = 1.0;
     if (!adaptation.romanticBoost) adaptation.romanticBoost = 1.0;
     if (!adaptation.sexyBoost) adaptation.sexyBoost = 1.0;
@@ -270,30 +293,25 @@ export async function adaptPersonalityToBehavior(userId, chatId, behavior, profi
 
     const levels = profile?.levels || {};
 
-    // اگر کاربر بی‌ادب است → بات بیشتر بی‌ادب می‌شود
     if (levels.rude > 0.3) {
         adaptation.rudeMultiplier = Math.min(1.0 + levels.rude, 2.5);
         adaptation.politenessLevel = Math.max(0.2, 1.0 - levels.rude);
     }
 
-    // اگر کاربر مودب است → بات مهربان‌تر می‌شود
     if (levels.polite > 0.3) {
         adaptation.kindnessBoost = Math.min(1.0 + levels.polite, 2.0);
         adaptation.politenessLevel = Math.min(1.0, adaptation.politenessLevel + levels.polite * 0.3);
     }
 
-    // اگر عاشقانه است → بات عاشقانه‌تر
     if (levels.romantic > 0.2) {
         adaptation.romanticBoost = Math.min(1.0 + levels.romantic * 1.5, 3.0);
     }
 
-    // اگر سکسی است → بات سکسی‌تر
     if (levels.sexy > 0.2) {
         adaptation.sexyBoost = Math.min(1.0 + levels.sexy * 1.5, 3.0);
         adaptation.dirtyTalkLevel = Math.min(1.0, adaptation.dirtyTalkLevel + levels.sexy * 0.4);
     }
 
-    // علاقه‌مندی‌های ورزشی و موسیقی
     adaptation.sportsInterest = Math.min(1.0, (levels.sports || 0) + 0.2);
     adaptation.musicInterest = Math.min(1.0, (levels.music || 0) + 0.2);
     adaptation.dirtyTalkLevel = Math.min(1.0, adaptation.dirtyTalkLevel + (levels.dirtyTalk || 0));
@@ -304,7 +322,8 @@ export async function adaptPersonalityToBehavior(userId, chatId, behavior, profi
     return adaptation;
 }
 
-// ===== استخراج علایق/کلمات کلیدی از پیام کاربر ======
+// ==================== Interest Extraction ====================
+// Extract user interests/keywords from message
 export async function extractUserInterests(userId, chatId, text) {
     if (!text || !text.trim()) return;
     const user = await getUser(userId, chatId);
@@ -314,7 +333,6 @@ export async function extractUserInterests(userId, chatId, text) {
 
     if (!profile.interests) profile.interests = [];
 
-    // استخراج کلمات کلیدی ساده: کلماتی که طولشان >= ۳ و تکراری نیست
     const words = text.toLowerCase().match(/[\u0600-\u06FF\s]+/g)?.[0]
         ? text.match(/[\u0600-\u06FF]{3,}/g) || []
         : text.match(/[a-zA-Z]{3,}/g) || [];
@@ -327,7 +345,6 @@ export async function extractUserInterests(userId, chatId, text) {
         }
     }
 
-    // نگهداری ۵۰ کلمه کلیدی
     if (profile.interests.length > 50) {
         profile.interests = profile.interests.slice(-50);
     }
@@ -337,14 +354,15 @@ export async function extractUserInterests(userId, chatId, text) {
     await updateUser(userId, chatId, { behaviorProfile: profile });
 }
 
-// ===== دریافت پیام قبلی کاربر برای context =====
+// ==================== Recent Messages ====================
+// Get last user message for context
 export async function getLastMessage(userId, chatId) {
     const user = await getUser(userId, chatId);
     const msgs = Array.isArray(user.last24hMessages) ? user.last24hMessages : [];
     return msgs.length > 0 ? msgs[msgs.length - 1] : '';
 }
 
-// ذخیره پیام در آرشیو ۲۴ ساعته (حداکثر ۱۰)
+// Store message in 24h archive (max 10)
 export async function saveRecentMessage(userId, chatId, message) {
     const user = await getUser(userId, chatId);
     let msgs = Array.isArray(user.last24hMessages) ? [...user.last24hMessages] : [];

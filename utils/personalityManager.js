@@ -30,7 +30,7 @@ export async function initializePersonalityInDB() {
 }
 
 // ===== بروزرسانی شبانه هوشمند بخش‌به-بخش =====
-// هر بخش را به‌صورت جداگانه با پرامپت پیشرفته بازنگری می‌کند
+
 export async function runNightlyPersonalityUpdate() {
     const status = await getSystemStatus();
     const now = new Date();
@@ -38,18 +38,30 @@ export async function runNightlyPersonalityUpdate() {
 
     // فقط یک بار در روز انجام می‌شود (حداقل ۲۴ ساعت فاصله)
     if (lastUpdate && (now - new Date(lastUpdate)) < 22 * 3600 * 1000) {
-        console.log("⏭️  personality update skipped (not 24h yet)");
+        console.log(" personality update skipped (not 24h yet)");
         return false;
     }
 
     try {
         const globalPersonality = await getGlobalPersonality();
         if (!globalPersonality) {
-            console.error("❌ personality not initialized in DB");
+            console.error(" personality not initialized in DB");
             return false;
         }
 
-        const sections = { ...globalPersonality.sections };
+                const sections = { ...globalPersonality.sections };
+        const baseSections = { ...(globalPersonality.baseSections || globalPersonality.sections) };
+
+        // ذخیره snapshot قبل از تغییر
+        const snapshots = Array.isArray(globalPersonality.snapshots)
+            ? [...globalPersonality.snapshots]
+            : [];
+        snapshots.push({
+            date: now,
+            sections: { ...sections }
+        });
+        const trimmedSnapshots = snapshots.slice(-7);  
+
         const allUsers = await User.find({ isActive: true });
 
         // جمع‌آوری داده‌های رفتاری روزانه از همه کاربران
@@ -60,10 +72,19 @@ export async function runNightlyPersonalityUpdate() {
         const sectionNotes = {};
 
         // ===== بازنگری بخش‌ها یک به یک =====
-        for (const sectionName of Object.keys(sections)) {
+               for (const sectionName of Object.keys(sections)) {
             try {
                 const existingContent = sections[sectionName] || "";
-                const updated = await updateSingleSection(model, sectionName, existingContent, dailyStats);
+                const baseContent = baseSections[sectionName] || existingContent;
+
+                const updated = await updateSingleSection(
+                    model,
+                    sectionName,
+                    existingContent,
+                    baseContent,
+                    dailyStats
+                );
+
                 if (updated && updated !== existingContent) {
                     updatedSections[sectionName] = updated;
                     sectionNotes[sectionName] = `Updated at ${now.toISOString()} based on ${dailyStats.totalInteractions} interactions.`;
@@ -71,8 +92,8 @@ export async function runNightlyPersonalityUpdate() {
                     updatedSections[sectionName] = existingContent;
                 }
             } catch (err) {
-                console.error(`❌ error updating section ${sectionName}:`, err.message);
-                updatedSections[sectionName] = sections[sectionName]; // fallback
+                console.error(` error updating section ${sectionName}:`, err.message);
+                updatedSections[sectionName] = sections[sectionName];
             }
         }
 
@@ -86,38 +107,82 @@ export async function runNightlyPersonalityUpdate() {
         }
 
         // ذخیره شخصیت بروز شده در DB
-        await updateGlobalPersonality(updatedSections, sectionNotes);
+        await updateGlobalPersonality(updatedSections, sectionNotes, trimmedSnapshots);
         await updateSystemStatus({ lastPersonalityUpdate: now });
-        console.log("✅ nightly personality update complete - all sections refreshed in DB");
+        console.log(" nightly personality update complete - all sections refreshed in DB");
         return true;
     } catch (err) {
-        console.error("❌ nightly personality update failed:", err);
+        console.error(" nightly personality update failed:", err);
         return false;
     }
 }
 
 // بازنگری یک بخش خاص با استفاده از Gemini
-async function updateSingleSection(model, sectionName, existingContent, dailyStats) {
-    const sectionPrompts = {
-        personality: `شما یک متخصص طراحی شخصیت هوش مصنوعی هستید. بخش "شخصیت پایه" زیر را بازنگری کنید. فقط متن جدید را خروجی بده، هیچ توضیحی اضافه نکن.\n\nامارهای امروز: رفتارهای رایج = ${JSON.stringify(dailyStats.toneDistribution)}\n\nمتن فعلی:\n${existingContent}`,
-        rules: `شما یک متخصص قوانین رفتاری AI هستید. قوانین رفتاری را بازنگری کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        music: `شما یک متخصص موسیقی هستید. بخش "موسیقی" شخصیت را بازنگری و غنی کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        sports: `شما یک متخصص ورزش هستید. بخش "ورزش" شخصیت را بازنگری و غنی کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        dirty_talk: `شما یک متخصص گفتار صریح هستید. بخش "گفتار صریح / dirty talk" را دقیقاً بازنگری کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        romantic: `شما یک متخصص رابطات عاشقانه هستید. بخش "عاشقانه" را بازنگری و احساسی‌تر کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        sexy: `شما یک متخصص گفتار جلب‌کننده و جنده هستید. بخش "سکسی / جلب‌کننده" را بازنگری کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        rude: `شما یک متخصص زبان‌های بی‌ادبانه و تیز هستید. بخش "بی‌ادبی" را بازنگری و قوی‌تر کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        scientific: `شما یک متخصص آموزش علمی هستید. بخش "علمی / تخصصی" را بازنگری و دقیق‌تر کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        bioUsage: `شما یک متخصص شخصی‌سازی محتوا هستید. بخش "استفاده از بیوگرافی" را بازنگری کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`,
-        default: `شما یک متخصص گفتار پیش‌فرض هستید. این بخش را بازنگری کنید. فقط متن جدید خروجی بده.\n\nمتن فعلی:\n${existingContent}`
-    };
+async function updateSingleSection(
+    model,
+    sectionName,
+    existingContent,
+    baseContent,
+    dailyStats
+) {
+    const prompt = `
+شما مسئول بازنگری کنترل‌شده شخصیت یک دستیار هوش مصنوعی هستید.
 
-    const prompt = sectionPrompts[sectionName] || sectionPrompts.default;
+## بخش مورد بازنگری
+${sectionName}
+
+## شخصیت پایه (Baseline)
+نسخه زیر مرجع اصلی و تغییرناپذیر این بخش است:
+
+<BASELINE>
+${baseContent}
+</BASELINE>
+
+## نسخه فعلی
+این نسخه ممکن است در طول زمان تغییر کرده باشد:
+
+<EXISTING_CONTENT>
+${existingContent}
+</EXISTING_CONTENT>
+
+## آمار رفتار کاربران
+${JSON.stringify(dailyStats?.toneDistribution ?? {}, null, 2)}
+
+## وظیفه
+نسخه فعلی را بررسی کن و فقط در صورت وجود دلیل مشخص، آن را اصلاح کن.
+
+قوانین الزامی:
+
+1. هویت، ویژگی‌های اصلی، لحن و اصول رفتاری موجود در BASELINE باید حفظ شوند.
+2. BASELINE مرجع نهایی است؛ نسخه فعلی اجازه ندارد ویژگی‌های اصلی آن را حذف یا نقض کند.
+3. فقط تغییرات محدودی مجاز هستند که باعث بهبود وضوح، انسجام یا سازگاری رفتاری شوند.
+4. از بازنویسی کامل متن، تغییر بی‌دلیل سبک نگارش و افزودن ویژگی‌های جدید خودداری کن.
+5. آمار رفتاری صرفاً یک منبع اطلاعاتی است؛ از آن برای شناسایی الگوهای احتمالی استفاده کن، نه برای تغییر خودکار هویت شخصیت.
+6. اگر آمار برای نتیجه‌گیری کافی نیست، بر اساس آن تغییری ایجاد نکن.
+7. از تقویت افراطی یک رفتار صرفاً به دلیل تکرار آن در آمار خودداری کن.
+8. اگر نسخه فعلی مناسب است، همان نسخه را بدون تغییر برگردان.
+9. خروجی باید فقط متن نهایی بخش باشد؛ بدون مقدمه، توضیح، نقل‌قول اضافی یا قالب‌بندی Markdown.
+
+## متن نهایی
+`;
+
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    return response.text().replace(/^["']|["']$/g, '').trim();
-}
 
+    const updatedContent = response.text()
+        .trim()
+        .replace(/^```(?:text|markdown)?\s*/i, "")
+        .replace(/\s*```$/, "")
+        .trim();
+
+    if (!updatedContent) {
+        throw new Error(
+            `Personality update returned empty content for section: ${sectionName}`
+        );
+    }
+
+    return updatedContent;
+}
 // جمع‌آوری آمار روزانه از تمام کاربران برای بهبود شخصیت
 function aggregateDailyStats(allUsers) {
     const toneCounts = {};

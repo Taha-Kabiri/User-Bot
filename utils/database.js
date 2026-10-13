@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { DEFAULT_PERSONALITY } from '../personality.js';
+import { type } from "os";
+import { timeStamp } from "console";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mongoURI = process.env.MONGO_URI;
@@ -14,17 +16,27 @@ if (!mongoURI) {
 await mongoose.connect(mongoURI);
 console.log("connecting to MongoDB Atlas");
 
-// ===== مدل شخصیت  =====
+// ==================== Mongoose Models ====================
+// Personality model
 const personalitySchema = new mongoose.Schema({
   type: { type: String, enum: ["global", "user"], default: "global" },
   userId: { type: Number, default: null },
   chatId: { type: Number, default: null },
-  // بخش‌های شخصیت به‌روزرسانی‌شده شبیه personality.txt
   sections: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  // شارگرهای بومی برای هر بخش (مثلاً افزودن کلمات یا مثال‌های جدید)
+  baseSections: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  snapshots: {
+    type: [{
+      date: { type: Date, default: Date.now },
+      sections: { type: mongoose.Schema.Types.Mixed, default: {} }
+    }],
+    default: []
+  },
   sectionNotes: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
@@ -33,14 +45,12 @@ const personalitySchema = new mongoose.Schema({
   version: { type: Number, default: 1 },
 });
 
-// ===== مدل دیکشنری  =====
+// Dictionary model
 const dictionarySchema = new mongoose.Schema({
-  // هر دسته‌شده بر پایه tone
   categories: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  // ردیف‌های جدید اضافه‌شده توسط کارگر شبانه
   dailyAdditions: {
     type: [{
       category: String,
@@ -53,7 +63,7 @@ const dictionarySchema = new mongoose.Schema({
   lastUpdated: { type: Date, default: Date.now }
 });
 
-// ===== مدل کاربر (گسترش یافته برای حافظه بلندمدت و پروفایل رفتاری) =====
+// User model (extended for long-term memory and behavior profile)
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true },
   chatId: { type: Number, required: true },
@@ -70,8 +80,14 @@ const userSchema = new mongoose.Schema({
   behaviorCounts: { type: mongoose.Schema.Types.Mixed, default: {} },
   receivedFiles: { type: [String], default: [] },
   analysisHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
-
-  // ===== حافظه روزانه: آخرین ۲ پیام هر روز =====
+  conversationPairs: {
+    type: [{
+      userMessage: { type: String, required: true },
+      botResponse: { type: String, required: true },
+      timestamp: { type: Date, default: Date.now }
+    }],
+    default: []
+  },
   dailyMessageMemory: {
     type: [{
       date: { type: String, required: true },
@@ -81,14 +97,10 @@ const userSchema = new mongoose.Schema({
   },
   last24hMessages: { type: [String], default: [] },
 
-  // ===== پروفایل رفتاری ترکیبی و میانگین کاربر =====
   behaviorProfile: {
     type: {
-      // شمارش دقیق تمام لحن‌ها
       toneCounts: { type: mongoose.Schema.Types.Mixed, default: {} },
-      // میانگین وزن‌دار رفتارهای کاربر (0-1)
       toneDistribution: { type: mongoose.Schema.Types.Mixed, default: {} },
-      // آخرین ۳۰ روز لحن‌ها
       recentTones: {
         type: [{
           date: String,
@@ -97,7 +109,6 @@ const userSchema = new mongoose.Schema({
         }],
         default: []
       },
-      // سطوح شخصیتی - چقدر این کاربر بی‌ادب، مودب، عاشقانه، سکسی، ورزشی و ... است
       levels: {
         rude: { type: Number, default: 0 },
         polite: { type: Number, default: 0 },
@@ -107,50 +118,39 @@ const userSchema = new mongoose.Schema({
         dirtyTalk: { type: Number, default: 0 },
         music: { type: Number, default: 0 }
       },
-      // سابقه آینده: مواردی که فعال‌گر شده است
       flags: {
         excessiveRude: { type: Boolean, default: false },
         excessivePolite: { type: Boolean, default: false },
         excessiveRomantic: { type: Boolean, default: false },
         excessiveSexy: { type: Boolean, default: false }
       },
-      // علاقه‌مندی‌های کاربر (کلمات/موضوعات کلیدی)
       interests: { type: [String], default: [] },
-      // آخرین بروزرسانی شناسایی سطوح
       lastProfileUpdate: { type: Date, default: Date.now }
     },
     default: {}
   },
 
-  // ===== سازگاری شخصیت بات نسبت به این کاربر (Adaptive Personality) =====
   personalityAdaptation: {
     type: {
-      // چند برابر بودن لحن بات برای بی‌ادبی نسبت به الگوی کاربر
       rudeMultiplier: { type: Number, default: 1.0 },
-      // چند برابر عاشقانگی بات
       romanticBoost: { type: Number, default: 1.0 },
-      // چند برابر سکسی بودن بات
       sexyBoost: { type: Number, default: 1.0 },
-      // چند برابر مهربونی بات
       kindnessBoost: { type: Number, default: 1.0 },
-      // سطح بهنشر بودن ورزشی بات برای این کاربر
       sportsInterest: { type: Number, default: 0.5 },
-      // سطح بهنشر بودن واقعی بات در موسیقی
       musicInterest: { type: Number, default: 0.5 },
-      // سطح dirty talk
       dirtyTalkLevel: { type: Number, default: 0.3 },
-      // سطح مودب بودن
       politenessLevel: { type: Number, default: 0.5 },
-      // بخش‌های سفارشی شخصیت برای این کاربر (اگر سفارشی شده باشد)
       customSections: { type: mongoose.Schema.Types.Mixed, default: {} },
-      // آخرین بروزرسانی
       lastAdaptation: { type: Date, default: Date.now }
     },
     default: {}
   },
 });
 
-// ===== مدل وضعیت سیستم (به‌روزرسانی شده) =====
+// Unique index to prevent duplicate user documents
+userSchema.index({ userId: 1, chatId: 1 }, { unique: true });
+
+// System status model
 const systemStatusSchema = new mongoose.Schema({
   totalDailyMessages: { type: Number, default: 0 },
   dailyResetTime: {
@@ -166,9 +166,7 @@ const systemStatusSchema = new mongoose.Schema({
   dictionaryMode: { type: Boolean, default: false },
   globalCooldownUntil: { type: Date, default: null },
   lastPing: { type: Date, default: Date.now },
-  // زمان آخرین بروزرسانی شبانه شخصیت
   lastPersonalityUpdate: { type: Date, default: null },
-  // زمان آخرین افزودن به دیکشنری
   lastDictionaryUpdate: { type: Date, default: null },
 });
 
@@ -177,7 +175,8 @@ const SystemStatus = mongoose.model("SystemStatus", systemStatusSchema);
 const Personality = mongoose.model("Personality", personalitySchema);
 const Dictionary = mongoose.model("Dictionary", dictionarySchema);
 
-// ===== توابع کمکی =====
+// ==================== Helper Functions ====================
+// Helper functions
 export async function getSystemStatus() {
   let status = await SystemStatus.findOne();
   if (!status) {
@@ -197,8 +196,12 @@ export async function updateSystemStatus(update) {
 export async function getUser(userId, chatId) {
   let user = await User.findOne({ userId, chatId });
   if (!user) {
-    user = new User({ userId, chatId });
-    await user.save();
+    try {
+      user = await User.create({ userId, chatId });
+    } catch (e) {
+      if (e.code !== 11000) throw e;
+      user = await User.findOne({ userId, chatId });
+    }
   }
   return user;
 }
@@ -210,13 +213,24 @@ export async function updateUser(userId, chatId, update) {
   });
 }
 
-// ===== توابع مدیریت شخصیت در DB =====
+// ==================== Personality DB Functions ====================
+// Personality DB functions
 export async function getGlobalPersonality() {
   let p = await Personality.findOne({ type: "global" });
   if (!p) {
     const def = loadPersonalityFromFile();
-    p = new Personality({ type: "global", sections: splitPersonalityIntoSections(def) });
+    const sections = splitPersonalityIntoSections(def);
+    p = new Personality({
+      type: "global",
+      sections: { ...sections },
+      baseSections: { ...sections },
+      snapshots: []
+    });
     await p.save();
+  } else if (!p.baseSections || Object.keys(p.baseSections).length === 0) {
+    p.baseSections = { ...p.sections };
+    await p.save();
+    console.log("✅ baseSections initialized from current sections");
   }
   return p;
 }
@@ -231,10 +245,19 @@ export async function getUserPersonality(userId, chatId) {
   return p;
 }
 
-export async function updateGlobalPersonality(sections, notes) {
+export async function updateGlobalPersonality(sections, notes, snapshots) {
+  const update = {
+    sections,
+    sectionNotes: notes || {},
+    lastUpdated: new Date(),
+    $inc: { version: 1 }
+  };
+  if (snapshots) {
+    update.snapshots = snapshots;
+  }
   return await Personality.findOneAndUpdate(
     { type: "global" },
-    { sections, sectionNotes: notes || {}, lastUpdated: new Date(), $inc: { version: 1 } },
+    update,
     { returnDocument: "after", upsert: true }
   );
 }
@@ -247,7 +270,8 @@ export async function updateUserPersonality(userId, chatId, sections) {
   );
 }
 
-// خواندن فایل personality.txt و تقسیم به بخش‌ها
+// ==================== Personality File Loading ====================
+// Load personality.txt and split into sections
 export function loadPersonalityFromFile() {
   const personalityPath = path.join(__dirname, '..', 'personality.txt');
   try {
@@ -257,27 +281,21 @@ export function loadPersonalityFromFile() {
   } catch (err) {
     console.warn("⚠️ personality.txt not found, using default");
   }
-  // fallback to personality.js default
   return DEFAULT_PERSONALITY;
 }
 
-// تقسیم متن شخصیت به بخش‌های منظم برای ویرایش شبانه
 export function splitPersonalityIntoSections(text) {
   const sections = {};
-  // استخراج بخش "شخصیت شما"
   const personalityMatch = text.match(/شخصیت شما:([\s\S]*?)(?=قوانین رفتاری|استفاده از|$)/i);
   sections.personality = personalityMatch ? personalityMatch[1].trim() : "";
 
-  // استخراج قوانین رفتاری
   const rulesMatch = text.match(/قوانین رفتاری[\s\S]*?:([\s\S]*?)(?=استفاده از|$)/i);
   sections.rules = rulesMatch ? rulesMatch[1].trim() : "";
 
-  // بخش‌های سفارشی: موسیقی، ورزش، بیوگرافی
   sections.music = extractSection(text, "موسیقی", "ورزش");
   sections.sports = extractSection(text, "ورزش", "گفت‌وگو");
   sections.bioUsage = extractSection(text, "بیوگرافی", "$");
 
-  // اگر خالی بود، مقدار پیش‌فرض بده
   if (!sections.personality) sections.personality = text.trim();
   if (!sections.rules) sections.rules = "طبیعی، انسانی و غیررباتی صحبت کن؛ سوال بی‌ربط نپرس.";
   if (!sections.music) sections.music = "با کاربران علاقه‌مند به موسیقی: صحبت‌های مرتبط با آهنگ، خواننده، ترانه بزن.";
@@ -301,7 +319,8 @@ function extractSection(text, startKeyword, endKeyword) {
   return text.slice(startIndex, endIndex).trim();
 }
 
-// ===== توابع مدیریت دیکشنری در DB =====
+// ==================== Dictionary DB Functions ====================
+// Dictionary DB functions
 export async function getDictionaryDoc() {
   let doc = await Dictionary.findOne();
   if (!doc) {
@@ -322,19 +341,18 @@ function loadDefaultDictionary() {
     console.warn("⚠️ dictionary.json not found, using built-in default");
   }
   return {
-    default: ["درود طاها نیستم، من دستیارشم در خدمت شما! اگه کارت مهمه بگو عزیزم."],
-    polite: ["چشم عزیزم، در خدمت شما هستم! 🙏"],
-    rude: ["کصخل بابا! تو به من می‌گی چیکار کنم؟ 🖕"],
-    romantic: ["چه چشمان قشنگی داری عزیزم! 😍"],
+    default: ["درود٬ طاها نیست به عنوان دستیار در دخمت شما هستم ."],
+    polite: ["چشم ، در خدمت شما هستم! 🙏"],
+    rude: [" انقدر گاوی که داری با ربات حرف میزی "],
+    romantic: ["چه چشمان قشنگی داری! 😍"],
     music: ["آهنگ خوبی انتخاب کردی! 🎵"],
     sexy: ["می‌دونی این لباس چه می‌کنه بهت؟ 😏"],
     sports: ["چه بازیک اگه؟ فوتبال امروز رو می‌بینی؟ ⚽"],
-    dirty_talk: ["می‌دونی صبح تا شب فکرت هستم... 💦"],
-    limit: ["خوب من باید برم! صبر کن تا خودش بیاد... ⏳"]
+    dirty_talk: ["می‌دونی صبح تا شب فکرت هستم... "],
+    limit: [" فعلا خداحافظ"]
   };
 }
 
-// افزودن واکنش جدید به دیکشنری برای دسته‌ی مشخص
 export async function addDictionaryEntry(category, response, sourceUserId = null) {
   const doc = await getDictionaryDoc();
   if (!doc.categories[category]) doc.categories[category] = [];
@@ -347,11 +365,9 @@ export async function addDictionaryEntry(category, response, sourceUserId = null
   return doc.categories;
 }
 
-// گرفتن تمام دیکشنری 
 export async function getAllDictionaryCategories() {
   const doc = await getDictionaryDoc();
   return doc.categories;
 }
 
-// صادرات مدل‌ها
 export { User, SystemStatus, Personality, Dictionary };
